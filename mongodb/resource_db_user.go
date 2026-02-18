@@ -25,13 +25,23 @@ func resourceDatabaseUser() *schema.Resource {
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"name":{
+			"name": {
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"password":{
-				Type:     schema.TypeString,
-				Required: true,
+			"password": {
+				Type:      schema.TypeString,
+				Optional:  true,
+				Default:   "",
+				Sensitive: true,
+			},
+			"mechanisms": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Description: "Authentication mechanisms (e.g., MONGODB-AWS for IAM database authentication)",
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
 			},
 			"role": {
 				Type:     schema.TypeSet,
@@ -86,7 +96,7 @@ func resourceDatabaseUserDelete(ctx context.Context, data *schema.ResourceData, 
 
 func resourceDatabaseUserUpdate(ctx context.Context, data *schema.ResourceData, i interface{}) diag.Diagnostics {
 	var config = i.(*MongoDatabaseConfiguration)
-	client , connectionError := MongoClientInit(config)
+	client, connectionError := MongoClientInit(config)
 	if connectionError != nil {
 		return diag.Errorf("Error connecting to database : %s ", connectionError)
 	}
@@ -99,29 +109,38 @@ func resourceDatabaseUserUpdate(ctx context.Context, data *schema.ResourceData, 
 	var userName = data.Get("name").(string)
 	var database = data.Get("auth_database").(string)
 	var userPassword = data.Get("password").(string)
-	
+
+	// Parse mechanisms
+	var mechanisms []string
+	if v, ok := data.GetOk("mechanisms"); ok {
+		for _, m := range v.([]interface{}) {
+			mechanisms = append(mechanisms, m.(string))
+		}
+	}
+
 	adminDB := client.Database(database)
 
 	result := adminDB.RunCommand(context.Background(), bson.D{{Key: "dropUser", Value: userName}})
 	if result.Err() != nil {
-		return diag.Errorf("%s",result.Err())
+		return diag.Errorf("%s", result.Err())
 	}
 	var roleList []Role
 	var user = DbUser{
-		Name:     userName,
-		Password: userPassword,
+		Name:       userName,
+		Password:   userPassword,
+		Mechanisms: mechanisms,
 	}
 	roles := data.Get("role").(*schema.Set).List()
 	roleMapErr := mapstructure.Decode(roles, &roleList)
 	if roleMapErr != nil {
 		return diag.Errorf("Error decoding map : %s ", roleMapErr)
 	}
-	err2 := createUser(client,user,roleList,database)
+	err2 := createUser(client, user, roleList, database)
 	if err2 != nil {
 		return diag.Errorf("Could not create the user : %s ", err2)
 	}
 
-	newId := database+"."+userName
+	newId := database + "." + userName
 	encoded := base64.StdEncoding.EncodeToString([]byte(newId))
 	data.SetId(encoded)
 	return resourceDatabaseUserRead(ctx, data, i)
@@ -154,16 +173,22 @@ func resourceDatabaseUserRead(ctx context.Context, data *schema.ResourceData, i 
 			}
 	}
 	dataSetError := data.Set("role", roles)
-	if dataSetError != nil  {
-		return diag.Errorf("error setting role : %s " , dataSetError)
+	if dataSetError != nil {
+		return diag.Errorf("error setting role : %s ", dataSetError)
 	}
 	dataSetError = data.Set("auth_database", database)
-	if dataSetError != nil  {
-		return diag.Errorf("error setting auth_db : %s " , dataSetError)
+	if dataSetError != nil {
+		return diag.Errorf("error setting auth_db : %s ", dataSetError)
 	}
 	dataSetError = data.Set("password", data.Get("password"))
-	if dataSetError != nil  {
-		return diag.Errorf("error setting password : %s " , dataSetError)
+	if dataSetError != nil {
+		return diag.Errorf("error setting password : %s ", dataSetError)
+	}
+	if len(result.Users[0].Mechanisms) > 0 {
+		dataSetError = data.Set("mechanisms", result.Users[0].Mechanisms)
+		if dataSetError != nil {
+			return diag.Errorf("error setting mechanisms : %s ", dataSetError)
+		}
 	}
 	data.SetId(stateID)
 	return nil
@@ -171,28 +196,46 @@ func resourceDatabaseUserRead(ctx context.Context, data *schema.ResourceData, i 
 
 func resourceDatabaseUserCreate(ctx context.Context, data *schema.ResourceData, i interface{}) diag.Diagnostics {
 	var config = i.(*MongoDatabaseConfiguration)
-	client , connectionError := MongoClientInit(config)
+	client, connectionError := MongoClientInit(config)
 	if connectionError != nil {
 		return diag.Errorf("Error connecting to database : %s ", connectionError)
 	}
 	var database = data.Get("auth_database").(string)
 	var userName = data.Get("name").(string)
 	var userPassword = data.Get("password").(string)
+
+	// Parse mechanisms
+	var mechanisms []string
+	if v, ok := data.GetOk("mechanisms"); ok {
+		for _, m := range v.([]interface{}) {
+			mechanisms = append(mechanisms, m.(string))
+		}
+	}
+
+	// Validate $external auth requirements
+	if database == "$external" && userPassword != "" {
+		return diag.Errorf("password must not be set when auth_database is $external (IAM auth)")
+	}
+	if database == "$external" && len(mechanisms) == 0 {
+		return diag.Errorf("mechanisms must be set when auth_database is $external (e.g., [\"MONGODB-AWS\"])")
+	}
+
 	var roleList []Role
 	var user = DbUser{
-		Name:     userName,
-		Password: userPassword,
+		Name:       userName,
+		Password:   userPassword,
+		Mechanisms: mechanisms,
 	}
 	roles := data.Get("role").(*schema.Set).List()
 	roleMapErr := mapstructure.Decode(roles, &roleList)
 	if roleMapErr != nil {
 		return diag.Errorf("Error decoding map : %s ", roleMapErr)
 	}
-	err := createUser(client,user,roleList,database)
+	err := createUser(client, user, roleList, database)
 	if err != nil {
 		return diag.Errorf("Could not create the user : %s ", err)
 	}
-	str := database+"."+userName
+	str := database + "." + userName
 	encoded := base64.StdEncoding.EncodeToString([]byte(str))
 	data.SetId(encoded)
 	return resourceDatabaseUserRead(ctx, data, i)
