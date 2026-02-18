@@ -118,6 +118,14 @@ func resourceDatabaseUserUpdate(ctx context.Context, data *schema.ResourceData, 
 		}
 	}
 
+	// Validate $external auth requirements
+	if database == "$external" && userPassword != "" {
+		return diag.Errorf("password must not be set when auth_database is $external (IAM auth)")
+	}
+	if database == "$external" && len(mechanisms) == 0 {
+		return diag.Errorf("mechanisms must be set when auth_database is $external (e.g., [\"MONGODB-AWS\"])")
+	}
+
 	adminDB := client.Database(database)
 
 	result := adminDB.RunCommand(context.Background(), bson.D{{Key: "dropUser", Value: userName}})
