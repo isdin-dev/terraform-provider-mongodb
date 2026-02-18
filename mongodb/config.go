@@ -30,8 +30,9 @@ type ClientConfig struct {
 	Proxy              string
 }
 type DbUser struct {
-	Name     string `json:"name"`
-	Password string `json:"password"`
+	Name       string   `json:"name"`
+	Password   string   `json:"password"`
+	Mechanisms []string `json:"mechanisms,omitempty"`
 }
 
 type Role struct {
@@ -55,10 +56,11 @@ type Privilege struct {
 }
 type SingleResultGetUser struct {
 	Users []struct {
-		Id    string `json:"_id"`
-		User  string `json:"user"`
-		Db    string `json:"db"`
-		Roles []struct {
+		Id         string   `json:"_id"`
+		User       string   `json:"user"`
+		Db         string   `json:"db"`
+		Mechanisms []string `json:"mechanisms"`
+		Roles      []struct {
 			Role string `json:"role"`
 			Db   string `json:"db"`
 		} `json:"roles"`
@@ -178,15 +180,26 @@ func (resource Resource) String() string {
 }
 
 func createUser(client *mongo.Client, user DbUser, roles []Role, database string) error {
-	var result *mongo.SingleResult
-	if len(roles) != 0 {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createUser", Value: user.Name},
-			{Key: "pwd", Value: user.Password}, {Key: "roles", Value: roles}})
-	} else {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createUser", Value: user.Name},
-			{Key: "pwd", Value: user.Password}, {Key: "roles", Value: []bson.M{}}})
+	cmd := bson.D{{Key: "createUser", Value: user.Name}}
+
+	// Only include pwd for non-IAM auth users
+	if user.Password != "" {
+		cmd = append(cmd, bson.E{Key: "pwd", Value: user.Password})
 	}
 
+	// Add roles
+	if len(roles) != 0 {
+		cmd = append(cmd, bson.E{Key: "roles", Value: roles})
+	} else {
+		cmd = append(cmd, bson.E{Key: "roles", Value: []bson.M{}})
+	}
+
+	// Add mechanisms if specified (e.g., ["MONGODB-AWS"] for IAM auth)
+	if len(user.Mechanisms) > 0 {
+		cmd = append(cmd, bson.E{Key: "mechanisms", Value: user.Mechanisms})
+	}
+
+	result := client.Database(database).RunCommand(context.Background(), cmd)
 	if result.Err() != nil {
 		return result.Err()
 	}
