@@ -75,14 +75,11 @@ func resourceDatabaseUserDelete(ctx context.Context, data *schema.ResourceData, 
 	var stateId = data.State().ID
 	var database = data.Get("auth_database").(string)
 
-	id, errEncoding := base64.StdEncoding.DecodeString(stateId)
-	if errEncoding != nil {
-		return diag.Errorf("ID mismatch %s", errEncoding)
+	// Split only on the first dot: user names can contain dots (e.g. emails)
+	userName, _, parseErr := resourceDatabaseUserParseId(stateId)
+	if parseErr != nil {
+		return diag.Errorf("ID mismatch %s", parseErr)
 	}
-
-	// StateID is a concatenation of database and username. We only use the username here.
-	splitId := strings.Split(string(id), ".")
-	userName := splitId[1]
 
 	adminDB := client.Database(database)
 
