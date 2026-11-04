@@ -239,35 +239,34 @@ func getRole(client *mongo.Client, roleName string, database string) (SingleResu
 }
 
 func createRole(client *mongo.Client, role string, roles []Role, privilege []PrivilegeDto, database string) error {
-	var privileges []Privilege
-	var result *mongo.SingleResult
-	for _, element := range privilege {
-		var prv Privilege
-		prv.Resource = Resource{
-			Db:         element.Db,
-			Collection: element.Collection,
-		}
-		prv.Actions = element.Actions
-		privileges = append(privileges, prv)
-	}
-	if len(roles) != 0 && len(privileges) != 0 {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createRole", Value: role},
-			{Key: "privileges", Value: privileges}, {Key: "roles", Value: roles}})
-	} else if len(roles) == 0 && len(privileges) != 0 {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createRole", Value: role},
-			{Key: "privileges", Value: privileges}, {Key: "roles", Value: []bson.M{}}})
-	} else if len(roles) != 0 && len(privileges) == 0 {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createRole", Value: role},
-			{Key: "privileges", Value: []bson.M{}}, {Key: "roles", Value: roles}})
-	} else {
-		result = client.Database(database).RunCommand(context.Background(), bson.D{{Key: "createRole", Value: role},
-			{Key: "privileges", Value: []bson.M{}}, {Key: "roles", Value: []bson.M{}}})
-	}
+	return runRoleCommand(client, "createRole", role, roles, privilege, database)
+}
 
-	if result.Err() != nil {
-		return result.Err()
+// updateRole replaces privileges and inherited roles in place, keeping the role granted to its users.
+func updateRole(client *mongo.Client, role string, roles []Role, privilege []PrivilegeDto, database string) error {
+	return runRoleCommand(client, "updateRole", role, roles, privilege, database)
+}
+
+func runRoleCommand(client *mongo.Client, command string, role string, roles []Role, privilege []PrivilegeDto, database string) error {
+	privileges := []Privilege{}
+	for _, element := range privilege {
+		privileges = append(privileges, Privilege{
+			Resource: Resource{
+				Db:         element.Db,
+				Collection: element.Collection,
+			},
+			Actions: element.Actions,
+		})
 	}
-	return nil
+	if roles == nil {
+		roles = []Role{}
+	}
+	result := client.Database(database).RunCommand(context.Background(), bson.D{
+		{Key: command, Value: role},
+		{Key: "privileges", Value: privileges},
+		{Key: "roles", Value: roles},
+	})
+	return result.Err()
 }
 
 func MongoClientInit(conf *MongoDatabaseConfiguration) (*mongo.Client, error) {
